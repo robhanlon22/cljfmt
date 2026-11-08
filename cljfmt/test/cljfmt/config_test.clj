@@ -1,8 +1,9 @@
 (ns cljfmt.config-test
   (:require [cljfmt.config :as config]
+            [cljfmt.main :as main]
             [clojure.edn :as edn]
             [clojure.spec.alpha :as s]
-            [clojure.test :refer [deftest is testing]]))
+            [clojure.test :refer [are deftest is testing]]))
 
 (deftest test-validate-config
   (testing "rejects EDN quoted symbols"
@@ -25,6 +26,45 @@
   (testing "handles nil and missing values"
     (is (s/valid? ::config/config {}))
     (is (not (s/valid? ::config/config nil)))))
+
+(deftest test-validate-alignment-rules
+  (is (s/valid? ::config/config
+                {:aligned-forms {'let #{0} 'cond :all 'case [:block 1]}
+                 :extra-aligned-forms {'with-bindings [0 2] 'binding nil}}))
+  (are [rule] (not (s/valid? ::config/config {:aligned-forms {'example rule}}))
+    #{-1}
+    [:block]
+    [:block -1]
+    [:block 1 2]
+    [:unknown 1]))
+
+(deftest test-load-invalid-alignment-rules
+  (let [file (java.io.File/createTempFile "cljfmt-config" ".edn")]
+    (try
+      (doseq [option [:aligned-forms :extra-aligned-forms]]
+        (spit file (pr-str {option {'case [:block -1]}}))
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Spec assertion failed"
+                              (config/load-config (.getPath file)))))
+      (finally
+        (.delete file)))))
+
+(deftest test-reader-conditional-cli-option
+  (let [source-file (java.io.File/createTempFile "cljfmt-source" ".cljc")
+        config-file (java.io.File/createTempFile "cljfmt-config" ".edn")
+        source "#?(:clj 1\n   :cljs 2)\n"
+        aligned "#?(:clj  1\n   :cljs 2)\n"]
+    (try
+      (doseq [[configured? flag expected]
+              [[false "--align-reader-conditionals" aligned]
+               [true "--no-align-reader-conditionals" source]]]
+        (spit config-file (pr-str {:align-reader-conditionals? configured?}))
+        (spit source-file source)
+        (main/-main "fix" (.getPath source-file)
+                    "--config" (.getPath config-file) "--quiet" flag)
+        (is (= expected (slurp source-file))))
+      (finally
+        (.delete source-file)
+        (.delete config-file)))))
 
 (deftest test-convert-legacy-keys
   (is (= {:indents {'foo [[:inner 0]]}}

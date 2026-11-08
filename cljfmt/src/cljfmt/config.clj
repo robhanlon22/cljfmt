@@ -44,8 +44,13 @@
 (s/def ::extra-indents          (s/map-of ::form-key any?))
 (s/def ::blank-line-forms       (s/map-of ::one-indent-key any?))
 (s/def ::extra-blank-line-forms (s/map-of ::one-indent-key any?))
-(s/def ::aligned-forms          (s/map-of ::one-indent-key any?))
-(s/def ::extra-aligned-forms    (s/map-of ::one-indent-key any?))
+(s/def ::alignment-rule
+  (s/nilable
+   (s/or :all #{:all}
+         :indexes (s/coll-of nat-int? :kind coll?)
+         :block (s/tuple #{:block} nat-int?))))
+(s/def ::aligned-forms       (s/map-of ::one-indent-key ::alignment-rule))
+(s/def ::extra-aligned-forms (s/map-of ::one-indent-key ::alignment-rule))
 
 (s/def ::config (s/keys :opt-un [::indents ::extra-indents
                                  ::blank-line-forms ::extra-blank-line-forms

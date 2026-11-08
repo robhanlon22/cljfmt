@@ -269,28 +269,48 @@ In order to load the standard configuration file from Leiningen, add the
   matched against qualified indent rules. See [INDENTS.md][].
 
 * `:aligned-forms` -
-  a map of symbols to indexes that tell cljfmt where to expect forms it
-  should align. For example, `{let #{0}}` indicates that the first
-  argument of let (the binding vector) should be aligned. This option
-  will **replace** the default aligned forms. Used by
-  `:align-form-columns?`. **Experimental.**
+  a map of symbols or regular expressions to alignment rules. A set of
+  argument indexes, such as `{let #{0}}`, aligns the contents of those
+  arguments (in this case, the binding vector). A `[:block n]` rule
+  skips the first `n` arguments and aligns the remaining arguments.
+  For example, `{case [:block 1]}` aligns the test constants and result
+  expressions after the expression being tested. `:all` is equivalent
+  to `[:block 0]`. Set a rule to `nil` in `:extra-aligned-forms` to disable
+  the corresponding default rule. This option will **replace** the default aligned forms.
+  Used by `:align-form-columns?`. **Experimental.**
 
 * `:align-form-columns?` -
-  true if cljfmt should align the symbols and values within certain
-  forms (such as `let`) so that they line up in columns. The forms are
-  defined via the `:aligned-forms` and `:extra-aligned-forms` options.
+  true if cljfmt should align binding forms such as `let`, conditional
+  forms (`cond`, `case`, `condp`, `cond->`, and `cond->>`), and `are`
+  test arguments so that they line up in columns. The forms are defined
+  via the `:aligned-forms` and `:extra-aligned-forms` options.
   Defaults to false. **Experimental.**
+
+  ```clojure
+  (cond ready?       (start)
+        interrupted? (stop)
+        :else        (wait))
+  ```
 
 * `:align-map-columns?` -
   true if cljfmt should align the keys and values of maps such that they
   line up in columns. Defaults to false. **Experimental.**
 
+* `:align-reader-conditionals?` -
+  true if cljfmt should align feature keywords and forms within reader
+  conditionals (`#?` and `#?@`). Defaults to false. **Experimental.**
+
+  ```clojure
+  #?(:clj  (System/currentTimeMillis)
+     :cljs (.now js/Date))
+  ```
+
 * `:align-single-column-lines?` -
   true if cljfmt should include lines with single columns (where the
   value is on the next line) when calculating column alignment. When
   false, forms with wrapped values won't cause excessive horizontal
-  padding in other lines. Only applies when `:align-form-columns?` or
-  `:align-map-columns?` is true. Defaults to false. **Experimental.**
+  padding in other lines. Applies to all column alignment options.
+  Defaults to false. **Experimental.**
 
 * `:max-column-alignment-gap` -
   a positive integer that sets the maximum number of spaces allowed

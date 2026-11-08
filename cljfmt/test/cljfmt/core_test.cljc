@@ -5,7 +5,8 @@
             [cljfmt.core :refer [reformat-string default-line-separator
                                  normalize-newlines find-line-separator
                                  replace-newlines wrap-normalize-newlines
-                                 realign-form unalign-form]]
+                                 realign-form unalign-form align-map-columns
+                                 align-form-columns align-reader-conditionals]]
             [cljfmt.test-util.common]
             [clojure.string :as str]
             [rewrite-clj.node :as n]
@@ -2731,6 +2732,377 @@
           "   :yyy :b})"]
          {:align-form-columns? true
           :aligned-forms {'foobar #{0}}}))))
+
+(deftest test-align-conditional-form-columns
+  (are [input expected]
+       (reformats-to? input expected {:align-form-columns? true})
+    ["(cond a 1"
+     "      longer-test 2)"]
+    ["(cond a           1"
+     "      longer-test 2)"]
+
+    ["(case x :a 1"
+     "      :longer 2)"]
+    ["(case x :a    1"
+     "      :longer 2)"]
+
+    ["(case very-long-expression"
+     "  :a 1"
+     "  :longer 2"
+     "  very-long-default)"]
+    ["(case very-long-expression"
+     "  :a      1"
+     "  :longer 2"
+     "  very-long-default)"]
+
+    ["(condp ="
+     "       expression"
+     "  :a 1"
+     "  :longer 2)"]
+    ["(condp ="
+     "       expression"
+     "  :a      1"
+     "  :longer 2)"]
+
+    ["(cond-> value"
+     "  a? (f)"
+     "  longer-test? (g))"]
+    ["(cond-> value"
+     "  a?           (f)"
+     "  longer-test? (g))"]
+
+    ["(cond->> value a? (f)"
+     "         longer-test? (g))"]
+    ["(cond->> value a?     (f)"
+     "         longer-test? (g))"]
+
+    ["(are [input expected note]"
+     "     (= input expected)"
+     "  1 1 :one"
+     "  100 100 :hundred)"]
+    ["(are [input expected note]"
+     "     (= input expected)"
+     "  1   1   :one"
+     "  100 100 :hundred)"]))
+
+(deftest test-align-conditional-form-options
+  (testing "alignment is opt-in"
+    (is (reformats-to?
+         ["(cond a 1"
+          "      longer 2)"]
+         ["(cond a 1"
+          "      longer 2)"])))
+  (testing "a nil override disables default alignment"
+    (let [input ["(cond a 1" "      longer 2)"]]
+      (is (reformats-to? input input {:align-form-columns? true
+                                      :extra-aligned-forms {'cond nil}}))))
+  (testing "blank lines separate groups after the leading arguments"
+    (is (reformats-to?
+         ["(case expression :a 1 ; first"
+          "  ;; comment"
+          "  :longer 2"
+          ""
+          "  :b 3"
+          "  :cc 4)"]
+         ["(case expression :a 1 ; first"
+          "  ;; comment"
+          "  :longer           2"
+          ""
+          "  :b  3"
+          "  :cc 4)"]
+         {:align-form-columns? true
+          :indentation? false
+          :blank-lines-separate-alignment? true})))
+  (testing "forms without alignment targets remain unchanged"
+    (let [input ["(cond)" "(case x)" "(condp = x)" "(are [x] x)" "#?()"]]
+      (is (reformats-to? input input {:align-form-columns? true
+                                      :align-reader-conditionals? true}))))
+  (testing "earlier lines of a leading argument do not affect column widths"
+    (let [input    ["(case (do (very-very-very-very-long-call)"
+                    " x) :a 1"
+                    " :longer 2)"]
+          expected ["(case (do (very-very-very-very-long-call)"
+                    "          x) :a 1"
+                    "      :longer   2)"]
+          options  {:align-form-columns? true}]
+      (is (reformats-to? input expected options))
+      (is (reformats-to? expected expected options))))
+  (testing "the :all rule aligns arguments without the leading symbol"
+    (let [expected ["(cond :a      1"
+                    "      :longer 2)"]
+          options  {:align-form-columns? true
+                    :extra-aligned-forms {'cond :all}}]
+      (is (reformats-to? ["(cond :a 1" " :longer 2)"] expected options))
+      (is (reformats-to? expected expected options)))))
+
+(deftest test-align-custom-form-columns
+  (are [rule options]
+       (reformats-to? ["(choose selector"
+                       "  :a 1"
+                       "  :longer 2)"]
+                      ["(choose selector"
+                       "  :a      1"
+                       "  :longer 2)"]
+                      (merge {:align-form-columns? true
+                              :indentation? false
+                              :aligned-forms rule}
+                             options))
+    {'choose [:block 1]}
+    {}
+
+    {'example/choose [:block 1]}
+    {:refer-map {'choose 'example}}
+
+    {#"^choose$" [:block 1]}
+    {})
+  (testing "aliases resolve qualified form names"
+    (is (reformats-to?
+         ["(e/choose selector"
+          "  :a 1"
+          "  :longer 2)"]
+         ["(e/choose selector"
+          "  :a      1"
+          "  :longer 2)"]
+         {:align-form-columns? true
+          :indentation? false
+          :extra-aligned-forms {'example/choose [:block 1]}
+          :alias-map {'e 'example}})))
+  (testing "qualified core forms use the default rules"
+    (is (reformats-to?
+         ["(clojure.core/cond"
+          "  a 1"
+          "  longer 2)"]
+         ["(clojure.core/cond"
+          "  a      1"
+          "  longer 2)"]
+         {:align-form-columns? true})))
+  (testing "unqualified forms resolve in the declared namespace"
+    (is (reformats-to?
+         ["(ns example)"
+          "(choose selector"
+          "  :a 1"
+          "  :longer 2)"]
+         ["(ns example)"
+          "(choose selector"
+          "  :a      1"
+          "  :longer 2)"]
+         {:align-form-columns? true
+          :indentation? false
+          :extra-aligned-forms {'example/choose [:block 1]}}))))
+
+(deftest test-align-form-columns-with-reader-macros
+  (testing "metadata on a binding vector"
+    (is (reformats-to?
+         ["(let ^:test [a 1"
+          "             longer 2]"
+          "  a)"]
+         ["(let ^:test [a      1"
+          "             longer 2]"
+          "  a)"]
+         {:align-form-columns? true})))
+  (testing "metadata on the leading symbol"
+    (is (reformats-to?
+         ["(^:test cond a 1"
+          "             longer 2)"]
+         ["(^:test cond a      1"
+          "             longer 2)"]
+         {:align-form-columns? true})))
+  (testing "a discarded form before the leading symbol"
+    (is (reformats-to?
+         ["(#_old let [a 1"
+          "            longer 2] [a longer])"]
+         ["(#_old let [a      1"
+          "            longer 2] [a longer])"]
+         {:align-form-columns? true})))
+  (testing "discarded forms occupy space without consuming a column"
+    (let [options  {:align-form-columns? true}
+          expected ["(cond a                  1"
+                    "      #_ignored longer   2"
+                    "      b #_previous-value 3)"]]
+      (is (reformats-to? ["(cond a 1"
+                          "      #_ignored longer 2"
+                          "      b #_previous-value 3)"]
+                         expected options))
+      (is (reformats-to? expected expected options))))
+  (testing "discarded forms do not consume leading arguments"
+    (is (reformats-to?
+         ["(case #_old expression"
+          "  :a 1"
+          "  :longer 2)"]
+         ["(case #_old expression"
+          "  :a      1"
+          "  :longer 2)"]
+         {:align-form-columns? true
+          :indentation? false}))))
+
+(deftest test-align-reader-conditionals
+  (are [input expected]
+       (reformats-to? input expected {:align-reader-conditionals? true})
+    ["#?(:clj one"
+     "   :cljs two)"]
+    ["#?(:clj  one"
+     "   :cljs two)"]
+
+    ["#?@(:clj [one]"
+     "    :cljs [two])"]
+    ["#?@(:clj  [one]"
+     "    :cljs [two])"])
+  (testing "alignment is opt-in"
+    (is (reformats-to?
+         ["#?(:clj one"
+          "   :cljs two)"]
+         ["#?(:clj one"
+          "   :cljs two)"]))))
+
+(deftest test-selective-column-alignment
+  (let [input ["{:a 1"
+               " :longer 2}"
+               "(let [a 1"
+               "      longer 2] a)"
+               "#?(:clj 1"
+               "   :cljs 2)"]
+        form  (p/parse-string-all (str/join "\n" input))]
+    (are [align expected]
+         (= expected (str/split-lines (n/string (align form))))
+      align-map-columns
+      (assoc input 0 "{:a      1")
+
+      #(align-map-columns % {:max-column-alignment-gap 1})
+      input
+
+      #(align-form-columns % {'let #{0}} {})
+      (assoc input 2 "(let [a      1")
+
+      #(align-form-columns % {'let #{0}} {:max-column-alignment-gap 1})
+      input
+
+      align-reader-conditionals
+      (assoc input 4 "#?(:clj  1")
+
+      #(align-reader-conditionals % {:max-column-alignment-gap 1})
+      input)))
+
+(deftest test-nested-column-alignment
+  (let [options {:align-form-columns? true
+                 :align-map-columns? true
+                 :align-reader-conditionals? true}
+        input   ["(let [x #?(:clj {:a (cond p? 1"
+                 "                         longer? 2)"
+                 "                 :longer 3}"
+                 "           :cljs {})"
+                 "      longer 4]"
+                 "  [x longer])"]
+        expected ["(let [x      #?(:clj  {:a      (cond p?      1"
+                  "                                     longer? 2)"
+                  "                       :longer 3}"
+                  "                :cljs {})"
+                  "      longer 4]"
+                  "  [x longer])"]]
+    (is (reformats-to? input expected options))
+    (is (reformats-to? expected expected options))))
+
+(deftest test-align-multiline-columns
+  (doseq [[input expected options]
+          [[["{{:a 123456 :b 3"
+             "  :longer 2 :longer-2 4} 5"
+             " :x 6}"]
+            ["{{:a      123456 :b        3"
+             "  :longer 2      :longer-2 4} 5"
+             " :x                           6}"]
+            {:align-map-columns? true}]
+           [["{:a (foo"
+             "      ; keep"
+             "      ;; move"
+             "      ;;; keep"
+             ""
+             "      y)"
+             " :longer (bar"
+             "          ;; z"
+             "          w)}"]
+            ["{:a      (foo"
+             "      ; keep"
+             "          ;; move"
+             "      ;;; keep"
+             ""
+             "          y)"
+             " :longer (bar"
+             "          ;; z"
+             "          w)}"]
+            {:align-map-columns? true :indent-line-comments? true}]
+           [["{:a (f"
+             " ;; keep"
+             " x)"
+             " :longer 2}"]
+            ["{:a      (f"
+             " ;; keep"
+             "          x)"
+             " :longer 2}"]
+            {:align-map-columns? true}]
+           [["{:a (f"
+             "x)"
+             " :longer 2}"]
+            ["{:a      (f"
+             "     x)"
+             " :longer 2}"]
+            {:align-map-columns? true :indentation? false}]
+           [["{:a          (f"
+             "x"
+             " y)"
+             " :longer 2}"]
+            ["{:a      (f"
+             "x"
+             "y)"
+             " :longer 2}"]
+            {:align-map-columns? true
+             :indentation? false}]
+           [["{:a (f [x"
+             "y"
+             "]"
+             "z"
+             ")"
+             " :longer (g z)}"]
+            ["{:a      (f [x"
+             "             y"
+             "             ]"
+             "            z"
+             "            )"
+             " :longer (g z)}"]
+            {:align-map-columns? true :remove-surrounding-whitespace? false}]
+           [["{:a {:x 1"
+             " :longer 2} :z (f"
+             " x)"
+             " :long-key {:x 3"
+             " :longer 4} :z (g"
+             " y)}"]
+            ["{:a        {:x 1"
+             "            :longer 2} :z (f"
+             "                           x)"
+             " :long-key {:x 3"
+             "            :longer 4} :z (g"
+             "                           y)}"]
+            {:align-map-columns? true :max-column-alignment-width 17}]
+           [["{:a [\"a"
+             "b\" (f"
+             "x)]"
+             " :longer (g)}"]
+            ["{:a      [\"a"
+             "b\" (f"
+             "    x)]"
+             " :longer (g)}"]
+            {:align-map-columns? true}]
+           [["(are [a b expected]"
+             "     (= (+ a b) expected)"
+             "  1 2 (+ 1"
+             "         2)"
+             "  100 200 300)"]
+            ["(are [a b expected]"
+             "     (= (+ a b) expected)"
+             "  1   2   (+ 1"
+             "             2)"
+             "  100 200 300)"]
+            {:align-form-columns? true}]]]
+    (is (reformats-to? input expected options))
+    (is (reformats-to? expected expected options))))
 
 (deftest test-align-form-columns-with-comments
   (testing "comments at end of bindings should not affect alignment"
